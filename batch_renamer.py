@@ -141,6 +141,9 @@ class BatchRenamer:
         self.replace_keyword.grid(row=0, column=3, padx=5)
         self.btn_search = tk.Button(input_frame, text="검색하기", command=self.start_search_thread, bg="#4CAF50", fg="white", width=12)
         self.btn_search.grid(row=0, column=4, padx=10)
+        
+        # 사용 설명서 버튼 추가
+        tk.Button(input_frame, text="사용 설명서(?)", command=self.show_help, bg="#2196F3", fg="white").grid(row=0, column=5, padx=5)
 
         self.content_check = tk.Checkbutton(input_frame, text="파일 내용 검색 포함", variable=self.content_search_var)
         self.content_check.grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5)
@@ -170,7 +173,6 @@ class BatchRenamer:
         self.status_label = tk.Label(status_btn_frame, text="준비 완료", fg="blue", font=("Arial", 9))
         self.status_label.pack(side=tk.LEFT)
         
-        # 중단 버튼 추가
         self.btn_stop = tk.Button(status_btn_frame, text="중단 (Stop)", command=self.stop_work, bg="#FF9800", fg="black", font=("Arial", 9, "bold"), state=tk.DISABLED)
         self.btn_stop.pack(side=tk.RIGHT, padx=5)
 
@@ -180,6 +182,40 @@ class BatchRenamer:
         tk.Button(bottom_frame, text="전체 해제", command=self.deselect_all).pack(side=tk.LEFT, padx=5)
         self.btn_rename = tk.Button(bottom_frame, text="일괄 이름 변경 실행", command=self.start_rename_thread, bg="#F44336", fg="white", font=("Arial", 10, "bold"))
         self.btn_rename.pack(side=tk.RIGHT, padx=10)
+
+    def show_help(self):
+        help_win = tk.Toplevel(self.root)
+        help_win.title("사용 설명서 - batch_renamer_v2")
+        help_win.geometry("600x550")
+        
+        txt = tk.Text(help_win, padx=10, pady=10, font=("Malgun Gothic", 10), wrap=tk.WORD)
+        txt.pack(fill=tk.BOTH, expand=True)
+        
+        help_content = """[ batch_renamer_v2 사용 설명서 ]
+
+1. 검색 기능
+- 검색 경로: 작업을 수행할 드라이브나 폴더를 지정합니다.
+- 파일 내용 검색 포함: 체크 시 텍스트(.txt, .csv) 및 엑셀(.xlsx, .xls 등) 파일 내부의 내용까지 검색합니다.
+- 현재 리스트 내에서 검색: 이미 검색된 결과 집합 안에서 재검색할 때 사용합니다.
+
+2. 상세 미리보기 및 정밀 변경
+- 검색 완료 후 나타나는 팝업창에서 변경을 원하는 특정 라인이나 셀만 선택(☑)할 수 있습니다.
+- 상단의 '변경할 문구'를 입력하고 '선택 항목 변경 실행'을 누르면 선택된 부분만 정밀하게 수정됩니다.
+
+3. 중단(Stop) 기능
+- 대용량 파일 검색이나 변경 작업이 너무 오래 걸릴 경우, 하단의 '중단(Stop)' 버튼을 눌러 작업을 안전하게 멈출 수 있습니다.
+
+4. 일괄 이름 변경
+- 메인 화면의 '일괄 이름 변경 실행' 버튼은 리스트에서 선택된 모든 파일의 이름을 한꺼번에 변경합니다.
+
+5. 결과 확인
+- 모든 변경 작업이 끝나면 '재검색 여부'를 묻는 팝업이 뜹니다. '예'를 누르면 변경이 잘 되었는지 즉시 확인할 수 있습니다.
+
+※ 주의사항: 엑셀 파일 수정 시 원본 파일을 미리 백업해두는 것을 권장합니다.
+"""
+        txt.insert(tk.END, help_content)
+        txt.config(state=tk.DISABLED)
+        tk.Button(help_win, text="닫기", command=help_win.destroy, width=10).pack(pady=10)
 
     def set_working(self, working):
         self.is_working = working
