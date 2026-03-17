@@ -1,4 +1,5 @@
 import os
+import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import psutil
@@ -56,9 +57,13 @@ class PreviewWindow(tk.Toplevel):
         for res in results:
             for match in res['details']:
                 match['selected'] = True
-                item_id = self.tree.insert("", tk.END, values=("☑", res['name'], match['type'], match['content']))
+                # 태그 추가: 삭제 기능에서 구분하기 위해 필요 (Name 또는 Name (Phone) 모두 포함)
+                tag = "file_name" if "Name" in match['type'] else "content"
+                item_id = self.tree.insert("", tk.END, values=("☑", res['name'], match['type'], match['content']), tags=(tag,))
+                # match_map에 전체 정보를 담아둠
                 self.match_map[item_id] = {"file_res": res, "match_info": match}
         
+        self.tree.match_map = self.match_map # execute_delete_items 에서 인식용 헬퍼
         self.tree.bind("<ButtonRelease-1>", self.on_item_click)
         
         btn_frame = tk.Frame(self, pady=10)
@@ -67,9 +72,32 @@ class PreviewWindow(tk.Toplevel):
         tk.Button(btn_frame, text="전체 선택", command=self.select_all, width=12).pack(side=tk.LEFT, padx=10)
         tk.Button(btn_frame, text="전체 해제", command=self.deselect_all, width=12).pack(side=tk.LEFT, padx=5)
         
-        self.btn_change = tk.Button(btn_frame, text="선택 항목 변경 실행", command=self.run_replace, bg="#F44336", fg="white", font=("Arial", 10, "bold"), width=25)
-        self.btn_change.pack(side=tk.RIGHT, padx=10)
-        tk.Button(btn_frame, text="확인 완료 (닫기)", command=self.destroy, width=15).pack(side=tk.RIGHT, padx=5)
+        self.btn_change = tk.Button(btn_frame, text="선택 항목 변경 실행", command=self.run_replace, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), width=20)
+        self.btn_change.pack(side=tk.LEFT, padx=10)
+
+        self.btn_delete = tk.Button(btn_frame, text="선택 항목 일괄 삭제", command=self.confirm_delete, bg="#f44336", fg="white", font=("Arial", 10, "bold"), width=20)
+        self.btn_delete.pack(side=tk.LEFT, padx=5)
+
+        tk.Button(btn_frame, text="확인 완료 (닫기)", command=self.destroy, width=15).pack(side=tk.RIGHT, padx=10)
+
+    def confirm_delete(self):
+        selected_items = [info for info in self.match_map.values() if info["match_info"].get("selected")]
+        if not selected_items:
+            messagebox.showwarning("경고", "삭제할 항목을 선택해주세요.")
+            return
+        
+        count = len(selected_items)
+        if messagebox.askyesno("삭제 확인", f"선택한 {count}개 항목을 삭제하시겠습니까?\n\n- 파일명 매칭: 파일 자체가 삭제됩니다.\n- 내용 매칭: 해당 줄/셀이 삭제됩니다.\n\n이 작업은 되돌릴 수 없습니다."):
+            # Treeview 노드 ID를 찾아서 처리하거나 match_map 정보를 직접 전달
+            # BatchRenamer의 execute_delete_items가 Treeview 노드를 받으므로 노드 리스트 구성
+            selected_nodes = [node_id for node_id, info in self.match_map.items() if info["match_info"].get("selected")]
+            self.main_app.execute_delete_items(selected_nodes, self.tree)
+            # 삭제 후 트리에서 제거
+            for node in selected_nodes:
+                try: 
+                    self.tree.delete(node)
+                    del self.match_map[node]
+                except: pass
 
     def on_item_click(self, event):
         item_id = self.tree.identify_row(event.y)
@@ -114,12 +142,15 @@ class BatchRenamer:
         self.root = root
         self.root.title("파일/폴더 일괄 이름 변경 도구")
         self.root.geometry("950x800")
-        self.search_results = []
         self.content_search_var = tk.BooleanVar(value=False)
+        self.phone_search_var = tk.BooleanVar(value=False)
         self.list_only_search_var = tk.BooleanVar(value=False)
+        self.doc_extensions = ['.xls', '.xlsx', '.xlsm', '.xlsb', '.txt', '.log', '.csv', '.doc', '.docx', '.ppt', '.pptx', '.hwp', '.hwpx', '.ini']
         self.is_working = False
         self.stop_event = threading.Event()
+        self.search_results = [] # 누락된 변수 추가
         self.setup_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing) # 윈도우 X 버튼 연동
 
     def setup_ui(self):
         # 상단 제작자 표시
@@ -152,11 +183,14 @@ class BatchRenamer:
         self.btn_search.grid(row=0, column=4, padx=5)
         
         tk.Button(input_frame, text="사용 설명서(?)", command=self.show_help, bg="#2196F3", fg="white", width=12).grid(row=0, column=5, padx=5)
+        tk.Button(input_frame, text="프로그램 종료", command=self.on_closing, bg="#757575", fg="white", width=12).grid(row=0, column=6, padx=5)
 
         self.content_check = tk.Checkbutton(input_frame, text="파일 내용 검색 포함", variable=self.content_search_var)
         self.content_check.grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5)
+        self.phone_check = tk.Checkbutton(input_frame, text="전화번호 검색", variable=self.phone_search_var)
+        self.phone_check.grid(row=1, column=2, sticky=tk.W, padx=5)
         self.list_only_check = tk.Checkbutton(input_frame, text="현재 리스트 내에서 검색", variable=self.list_only_search_var)
-        self.list_only_check.grid(row=1, column=2, columnspan=2, sticky=tk.W, padx=5)
+        self.list_only_check.grid(row=1, column=3, columnspan=2, sticky=tk.W, padx=5)
 
         list_frame = tk.Frame(self.root)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10)
@@ -189,8 +223,20 @@ class BatchRenamer:
         tk.Button(bottom_frame, text="전체 선택", command=self.select_all).pack(side=tk.LEFT, padx=10)
         tk.Button(bottom_frame, text="전체 해제", command=self.deselect_all).pack(side=tk.LEFT, padx=5)
         
-        self.btn_rename = tk.Button(bottom_frame, text="일괄 이름 변경 실행", command=self.start_rename_thread, bg="#F44336", fg="white", font=("Arial", 10, "bold"), width=20)
-        self.btn_rename.pack(side=tk.RIGHT, padx=10)
+        self.btn_main_delete = tk.Button(bottom_frame, text="선택 항목 일괄 삭제", command=self.confirm_main_delete, bg="#f44336", fg="white", font=("Arial", 10, "bold"), width=20)
+        self.btn_main_delete.pack(side=tk.RIGHT, padx=10)
+
+        self.btn_rename = tk.Button(bottom_frame, text="일괄 이름 변경 실행", command=self.start_rename_thread, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), width=20)
+        self.btn_rename.pack(side=tk.RIGHT, padx=5)
+
+    def on_closing(self):
+        if self.is_working:
+            if messagebox.askyesno("종료 확인", "현재 작업(검색/변경/삭제)이 진행 중입니다.\n작업을 중단하고 프로그램을 종료하시겠습니까?"):
+                self.stop_event.set()
+                self.root.destroy()
+        else:
+            if messagebox.askyesno("종료", "프로그램을 종료하시겠습니까?"):
+                self.root.destroy()
 
     def show_help(self):
         help_win = tk.Toplevel(self.root)
@@ -267,12 +313,41 @@ class BatchRenamer:
                 if not any(res["path"] == f for res in self.search_results):
                     self.add_to_list("File", "Selected", os.path.basename(f), f)
 
-    def search_items(self):
+    def confirm_main_delete(self):
+        # 메인 트리에서 체크된 항목들 (현재 tree의 match_map이 없으므로 search_results 기반)
+        selected_indices = [i for i, res in enumerate(self.search_results) if res.get("selected")]
+        if not selected_indices:
+            messagebox.showwarning("경고", "삭제할 항목을 선택해주세요.")
+            return
+        
+        count = len(selected_indices)
+        if messagebox.askyesno("삭제 확인", f"메인 리스트에서 선택한 {count}개 항목을 일괄 삭제하시겠습니까?\n\n- 파일명 매칭: 파일 자체가 삭제됩니다.\n- 내용 매칭: 해당 파일의 모든 매칭된 줄/셀이 삭제됩니다.\n\n이 작업은 되돌릴 수 없습니다."):
+            # execute_delete_items에 전달할 노드 리스트 구성
+            selected_nodes = []
+            for i in selected_indices:
+                selected_nodes.append(self.search_results[i]["id"])
+            
+            self.execute_delete_items(selected_nodes, self.tree)
+            
+            # 삭제 후 검색 결과에서 동기화 (필요 시 재검색 유도)
+            if messagebox.askyesno("완료", "삭제 작업이 완료되었습니다.\n리스트를 갱신하시겠습니까?"):
+                self.search_items()
+
+    def apply_changes(self):
         base_path = self.path_entry.get(); keyword = self.search_keyword.get(); list_only = self.list_only_search_var.get()
-        if not keyword: messagebox.showwarning("경고", "키워드를 입력하세요."); return
+        phone_search = self.phone_search_var.get()
+        if not keyword and not phone_search: messagebox.showwarning("경고", "키워드를 입력하세요."); return
         self.set_working(True); self.update_progress(0, "검색 준비 중...")
         
-        n_keyword = norm(keyword); preview_data = []
+    def search_items(self):
+        base_path = self.path_entry.get(); keyword = self.search_keyword.get(); list_only = self.list_only_search_var.get()
+        phone_search = self.phone_search_var.get()
+        if not keyword and not phone_search: messagebox.showwarning("경고", "키워드를 입력하세요."); return
+        self.set_working(True); self.update_progress(0, "검색 준비 중...")
+        
+        phone_pattern = re.compile(r'010[- ]?\d{3,4}[- ]?\d{4}')
+        n_keyword = norm(keyword).strip()
+        preview_data = []
         if list_only:
             total = len(self.search_results)
             for i, res in enumerate(self.search_results, 1):
@@ -280,10 +355,21 @@ class BatchRenamer:
                 self.update_progress((i/total)*100, f"검색 중: {os.path.basename(res['path'])} ({i}/{total})")
                 matches = []; match_type = "Selected"
                 f_name = os.path.basename(res['path']); ext = os.path.splitext(f_name)[1].lower()
-                if n_keyword in norm(f_name): matches.append({"type": "Name", "content": f_name}); match_type = "Name"
+                n_fname = norm(f_name)
+                # 파일명 검색 (일반 키워드 또는 전화번호)
+                if n_keyword and n_keyword in n_fname:
+                    matches.append({"type": "Name", "content": f_name}); match_type = "Name"
+                elif phone_search:
+                    pm = phone_pattern.search(n_fname)
+                    if pm:
+                        matches.append({"type": "Name (Phone)", "content": f_name, "raw": pm.group()})
+                        match_type = "Name (Phone)"
                 if self.content_search_var.get():
-                    c_matches = self._dispatch_content_search(res['path'], ext, keyword)
-                    if c_matches: matches.extend(c_matches); match_type = self._get_match_label(ext)
+                    if phone_search and ext not in self.doc_extensions:
+                        matches = []
+                    else:
+                        c_matches = self._dispatch_content_search(res['path'], ext, keyword, phone_search)
+                        if c_matches: matches.extend(c_matches); match_type = self._get_match_label(ext)
                 if matches:
                     self.tree.set(res["id"], column="match", value=match_type); res["match"] = match_type
                     preview_data.append({"name": f_name, "path": res['path'], "details": matches})
@@ -307,10 +393,21 @@ class BatchRenamer:
                     if self.stop_event.is_set(): break
                     if i % 10 == 0: self.update_progress((i/total)*100, f"검색 중... ({i}/{total})")
                     f = os.path.basename(full_path); ext = os.path.splitext(f)[1].lower(); m_type = ""
+                    n_fname = norm(f)
                     item_matches = []
-                    if n_keyword in norm(f): m_type = "Name"; item_matches.append({"type": "Name", "content": f})
+                    # 파일명 검색 (일반 키워드 또는 전화번호)
+                    if n_keyword and n_keyword in n_fname:
+                        m_type = "Name"; item_matches.append({"type": "Name", "content": f})
+                    elif phone_search:
+                        pm = phone_pattern.search(n_fname)
+                        if pm:
+                            m_type = "Name (Phone)"
+                            item_matches.append({"type": "Name (Phone)", "content": f, "raw": pm.group()})
                     if self.content_search_var.get():
-                        c_matches = self._dispatch_content_search(full_path, ext, keyword)
+                        if phone_search and ext not in self.doc_extensions:
+                            c_matches = []
+                        else:
+                            c_matches = self._dispatch_content_search(full_path, ext, keyword, phone_search)
                         if c_matches: m_type = self._get_match_label(ext); item_matches.extend(c_matches)
                     if m_type: 
                         self.add_to_list("File", m_type, f, full_path)
@@ -323,32 +420,40 @@ class BatchRenamer:
                 else: PreviewWindow(self.root, preview_data, self, keyword)
             except Exception as e: self.set_working(False); messagebox.showerror("오류", str(e))
 
-    def _dispatch_content_search(self, path, ext, keyword):
+    def _dispatch_content_search(self, path, ext, keyword, phone_search=False):
         if self.stop_event.is_set(): return []
-        if ext in ['.txt', '.log', '.csv']: return self.search_in_text(path, keyword)
-        if ext in ['.xlsx', '.xlsm']: return self.search_in_excel(path, keyword)
-        if ext in ['.xlsb']: return self.search_in_xlsb(path, keyword)
-        if ext in ['.xls']: return self.search_in_xls(path, keyword)
+        if ext in ['.txt', '.log', '.csv', '.ini']: return self.search_in_text(path, keyword, phone_search)
+        if ext in ['.xlsx', '.xlsm']: return self.search_in_excel(path, keyword, phone_search)
+        if ext in ['.xlsb']: return self.search_in_xlsb(path, keyword, phone_search)
+        if ext in ['.xls']: return self.search_in_xls(path, keyword, phone_search)
         return []
 
     def _get_match_label(self, ext): return "Content (Excel)" if ext in ['.xlsx', '.xlsm', '.xlsb', '.xls'] else "Content (TXT)"
 
-    def search_in_text(self, file_path, keyword):
+    def search_in_text(self, file_path, keyword, phone_search=False):
         matches = []; n_keyword = norm(keyword)
+        phone_pattern = re.compile(r'010[- ]?\d{3,4}[- ]?\d{4}')
         for enc in ['utf-8', 'cp949', 'euc-kr']:
             if self.stop_event.is_set(): break
             try:
                 with open(file_path, 'r', encoding=enc) as f:
                     for i, line in enumerate(f, 1):
                         if self.stop_event.is_set(): break
-                        if n_keyword in norm(line): matches.append({"type": f"Line {i}", "content": line.strip()[:100], "pos": i})
+                        n_line = norm(line)
+                        if phone_search:
+                            found = phone_pattern.findall(n_line)
+                            for p in found:
+                                matches.append({"type": f"Line {i} (Phone)", "content": f"{p} (in: {line.strip()[:50]}...)", "pos": i, "raw": p})
+                        if n_keyword and n_keyword in n_line:
+                            matches.append({"type": f"Line {i}", "content": line.strip()[:100], "pos": i})
                 return matches
             except: continue
         return []
 
-    def search_in_excel(self, file_path, keyword):
+    def search_in_excel(self, file_path, keyword, phone_search=False):
         import openpyxl
         n_keyword = norm(keyword); matches = []
+        phone_pattern = re.compile(r'010[- ]?\d{3,4}[- ]?\d{4}')
         try:
             for data_only in [True, False]:
                 if self.stop_event.is_set(): break
@@ -359,16 +464,28 @@ class BatchRenamer:
                         if self.stop_event.is_set(): break
                         for c, val in enumerate(row, 1):
                             if self.stop_event.is_set(): break
-                            if val is not None and n_keyword in norm(val):
+                            if val is None: continue
+                            s_val = norm(val)
+                            if phone_search:
+                                found = phone_pattern.findall(s_val)
+                                for p in found:
+                                    matches.append({"type": "Cell (Phone)", "content": f"[{sheet.title}!{openpyxl.utils.get_column_letter(c)}{r}] {p}", "sheet": sheet.title, "row": r, "col": c, "raw": p})
+                                # 인접 3개 셀 결합 체크 (010 | 1234 | 5678 형식 지원)
+                                if c <= len(row) - 2:
+                                    combined = "".join(str(x).strip() if x is not None else "" for x in row[c-1:c+2])
+                                    if phone_pattern.fullmatch(combined):
+                                        matches.append({"type": "Cell (Phone/Split)", "content": f"[{sheet.title}!{openpyxl.utils.get_column_letter(c)}{r}~] {combined}", "sheet": sheet.title, "row": r, "col": c, "raw": combined})
+                            if n_keyword and n_keyword in s_val:
                                 matches.append({"type": "Cell", "content": f"[{sheet.title}!{openpyxl.utils.get_column_letter(c)}{r}] {str(val)[:100]}", "sheet": sheet.title, "row": r, "col": c})
                 wb.close()
                 if matches: break
         except: pass
         return matches
 
-    def search_in_xls(self, file_path, keyword):
+    def search_in_xls(self, file_path, keyword, phone_search=False):
         import xlrd
         n_keyword = norm(keyword); matches = []
+        phone_pattern = re.compile(r'010[- ]?\d{3,4}[- ]?\d{4}')
         try:
             wb = xlrd.open_workbook(file_path)
             for s in wb.sheets():
@@ -378,14 +495,25 @@ class BatchRenamer:
                     for c in range(s.ncols):
                         if self.stop_event.is_set(): break
                         val = s.cell_value(r, c)
-                        if val is not None and n_keyword in norm(val):
+                        if val is None: continue
+                        s_val = norm(val)
+                        if phone_search:
+                            found = phone_pattern.findall(s_val)
+                            for p in found:
+                                matches.append({"type": "Cell (Phone)", "content": f"[{s.name}!{r+1},{c+1}] {p}", "sheet": s.name, "row": r+1, "col": c+1, "raw": p})
+                            # 인접 3개 셀 결합 체크 (xls)
+                            if c < s.ncols - 2:
+                                val2 = s.cell_value(r, c+1); val3 = s.cell_value(r, c+2)
+                                combined = "".join(str(x).strip() for x in [val, val2, val3] if x is not None)
+                                if phone_pattern.fullmatch(combined):
+                                    matches.append({"type": "Cell (Phone/Split)", "content": f"[{s.name}!{r+1},{c+1}~] {combined}", "sheet": s.name, "row": r+1, "col": c+1, "raw": combined})
+                        if n_keyword and n_keyword in s_val: # n_keyword 사용
                             matches.append({"type": "Cell", "content": f"[{s.name}!{r+1},{c+1}] {str(val)[:100]}", "sheet": s.name, "row": r+1, "col": c+1})
         except: pass
         return matches
 
-    def search_in_xlsb(self, file_path, keyword):
-        from pyxlsb import open_workflow
         n_keyword = norm(keyword); matches = []
+        phone_pattern = re.compile(r'010-\d{3,4}-\d{4}')
         try:
             with open_workflow(file_path) as wb:
                 for s in wb.sheets:
@@ -394,7 +522,14 @@ class BatchRenamer:
                         for row in sheet.rows():
                             if self.stop_event.is_set(): break
                             for cell in row:
-                                if cell.v is not None and n_keyword in norm(cell.v):
+                                if cell.v is None: continue
+                                s_val = norm(cell.v)
+                                if phone_search:
+                                    found = phone_pattern.findall(s_val)
+                                    for p in found:
+                                        matches.append({"type": "Cell (Phone)", "content": f"[{s}!{cell.address}] {p}", "sheet": s, "address": cell.address, "raw": p})
+                                    # xlsb의 경우 행 단위 데이터 접근이 구조상 다르므로, 필요 시 별도 구현 가능하나 현재는 단일 셀 위주
+                                if n_keyword and n_keyword in s_val:
                                     matches.append({"type": "Cell", "content": f"[{s}!{cell.address}] {str(cell.v)[:100]}", "sheet": s, "address": cell.address})
         except: pass
         return matches
@@ -414,9 +549,16 @@ class BatchRenamer:
             self.update_progress((i/total)*100, f"변경 중: {os.path.basename(path)} ({i}/{total})")
             ext = os.path.splitext(path)[1].lower()
             try:
-                if any(m["type"] == "Name" for m in matches):
-                    os.rename(path, os.path.join(os.path.dirname(path), os.path.basename(path).replace(target, replace)))
+                # Name 매칭이 하나라도 있으면 파일명 변경 시도
+                name_match = next((m for m in matches if "Name" in m["type"]), None)
+                if name_match:
+                    # 키워드가 있다면 키워드 우선, 없다면 휴대전화 매칭값 사용
+                    actual_target = target if target else name_match.get("raw", target)
+                    if actual_target:
+                        new_name = os.path.basename(path).replace(actual_target, replace)
+                        os.rename(path, os.path.join(os.path.dirname(path), new_name))
                     continue
+                
                 if ext in ['.txt', '.log', '.csv']: self._replace_specific_text(path, matches, target, replace)
                 elif ext in ['.xlsx', '.xlsm']: self._replace_specific_excel(path, matches, target, replace)
                 else: self.replace_in_xls(path, target, replace)
@@ -447,6 +589,9 @@ class BatchRenamer:
         wb.save(path)
 
     def rename_items(self):
+        if not self.search_results:
+            messagebox.showwarning("경고", "검색을 먼저 진행해 주세요.")
+            return
         target = self.search_keyword.get(); replace = self.replace_keyword.get(); selected = [res for res in self.search_results if res["selected"]]
         if not selected: messagebox.showwarning("경고", "항목을 선택하세요."); return
         if not messagebox.askyesno("확인", f"{len(selected)}개를 변경하시겠습니까?"): return
@@ -516,6 +661,146 @@ class BatchRenamer:
 
     def deselect_all(self):
         for res in self.search_results: res["selected"] = False; self.tree.set(res["id"], column="select", value="☐")
+
+
+    def execute_delete_items(self, selected_nodes, tree):
+        # PreviewWindow의 match_map을 활용하거나 tree 노드에서 정보를 가져옴
+        content_tasks = {} 
+        file_to_delete = set()
+        
+        # 중요: PreviewWindow의 경우 tree가 treeview 객체임
+        # tree.match_map이 있으면 PreviewWindow에서 호출된 것임
+        is_preview = hasattr(tree, "match_map")
+        
+        for node in selected_nodes:
+            tags = tree.item(node, "tags")
+            if is_preview:
+                # PreviewWindow 전용 로직
+                info = tree.match_map[node]
+                path = info["file_res"]["path"]
+                if "file_name" in tags:
+                    file_to_delete.add(path)
+                else:
+                    item_info = tree.item(node, "values") # [select, file, type, detail]
+                    content_tasks.setdefault(path, []).append({
+                        "type": item_info[2],
+                        "info": item_info,
+                        "match_info": info["match_info"] # 원본 매칭 정보 추가
+                    })
+            else:
+                # 메인 윈도우 전용 로직
+                values = tree.item(node, "values") # ("☑"/"☐", Type, Match, Name, Path)
+                path = values[4]
+                m_type = values[2]
+                if m_type == "Name" or m_type == "Name (Phone)":
+                    file_to_delete.add(path)
+                else:
+                    # 메인 화면에서 내용 삭제 시, 해당 파일 내의 모든 매칭을 가져옴
+                    # self.search_results에서 해당 파일의 details를 가져와서 tasks로 구성
+                    res = next((r for r in self.search_results if r["path"] == path), None)
+                    if res and "details" in res:
+                        for m in res["details"]:
+                            if m["type"] != "Name": # 파일명 매칭 제외한 내용 매칭들
+                                content_tasks.setdefault(path, []).append({
+                                    "type": m["type"],
+                                    "info": [None, None, m["type"], m["content"]], # 헬퍼 대응 형식
+                                    "match_info": m
+                                })
+
+        # 1. 파일 자체 삭제
+        success_files = 0; fail_files = 0
+        for f_path in file_to_delete:
+            try:
+                if os.path.exists(f_path):
+                    os.remove(f_path)
+                    success_files += 1
+            except Exception as e:
+                fail_files += 1
+                print(f"File delete fail: {f_path}, {e}")
+
+        # 2. 내용 삭제 (파일별 처리)
+        success_content = 0; fail_content = 0
+        for f_path, tasks in content_tasks.items():
+            if f_path in file_to_delete: continue # 이미 삭제된 파일은 건너뛰기
+            
+            try:
+                ext = os.path.splitext(f_path)[1].lower()
+                if ext in ['.xls', '.xlsx', '.xlsm', '.xlsb']:
+                    # 엑셀 처리
+                    self._delete_excel_content(f_path, tasks)
+                    success_content += len(tasks)
+                else:
+                    # 텍스트 처리 (라인 삭제)
+                    self._delete_text_content(f_path, tasks)
+                    success_content += len(tasks)
+            except Exception as e:
+                fail_content += len(tasks)
+                print(f"Content delete fail: {f_path}, {e}")
+
+        total_msg = f"삭제 완료\n\n- 파일 삭제: {success_files}건 성공"
+        if fail_files: total_msg += f" ({fail_files}건 실패)"
+        total_msg += f"\n- 내용 삭제: {success_content}건 성공"
+        if fail_content: total_msg += f" ({fail_content}건 실패)"
+        messagebox.showinfo("결과", total_msg)
+
+    def _delete_text_content(self, file_path, tasks):
+        lines_to_remove = set()
+        for t in tasks:
+            if "match_info" in t and "pos" in t["match_info"]:
+                lines_to_remove.add(int(t["match_info"]["pos"]) - 1)
+            else:
+                # 레거시 백업: 문자열 파싱
+                c_info = t["info"][3] if len(t["info"]) == 4 else t["info"][1]
+                import re
+                m = re.search(r"Line (\d+)", str(t["info"][2]) + c_info) # 'Type' 또는 'Detail'에서 찾음
+                if m: lines_to_remove.add(int(m.group(1)) - 1)
+        
+        if not lines_to_remove: return
+        
+        for enc in ['utf-8', 'cp949', 'euc-kr']:
+            try:
+                with open(file_path, 'r', encoding=enc) as f:
+                    lines = f.readlines()
+                new_lines = [l for i, l in enumerate(lines) if i not in lines_to_remove]
+                with open(file_path, 'w', encoding=enc) as f:
+                    f.writelines(new_lines)
+                return
+            except: continue
+
+    def _delete_excel_content(self, file_path, tasks):
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.xlsx' or ext == '.xlsm':
+            import openpyxl
+            wb = openpyxl.load_workbook(file_path)
+            for t in tasks:
+                if "match_info" in t and "row" in t["match_info"]:
+                    m = t["match_info"]
+                    sh_name = m.get("sheet"); row_num = m.get("row"); col_num = m.get("col")
+                    if sh_name in wb.sheetnames:
+                        ws = wb[sh_name]
+                        if "Split" in t["type"]:
+                            for i in range(3): ws.cell(row=row_num, column=col_num + i).value = None
+                        else:
+                            ws.cell(row=row_num, column=col_num).value = None
+                else:
+                    # 레거시 백업: 문자열 파싱
+                    c_info = t["info"][3] if len(t["info"]) == 4 else t["info"][1]
+                    import re
+                    m = re.match(r"\[(.+)!([A-Z]+)(\d+)\]", c_info)
+                    if m:
+                        sh_name, col_let, row_num = m.groups()
+                        if sh_name in wb.sheetnames:
+                            ws = wb[sh_name]; ws[f"{col_let}{row_num}"] = None
+                    else:
+                        m = re.match(r"\[(.+)!([A-Z]+)(\d+)~\]", c_info)
+                        if m:
+                            sh_name, col_let, row_num = m.groups()
+                            if sh_name in wb.sheetnames:
+                                ws = wb[sh_name]
+                                c_idx = openpyxl.utils.column_index_from_string(col_let)
+                                for i in range(3): ws.cell(row=int(row_num), column=c_idx+i).value = None
+            wb.save(file_path)
+        # .xls 등은 현재 라이브러리 제약상 수정을 위해 xlutils 등이 추가로 필요하므로 보류하거나 알림
 
 if __name__ == "__main__":
     root = tk.Tk(); app = BatchRenamer(root); root.mainloop()
